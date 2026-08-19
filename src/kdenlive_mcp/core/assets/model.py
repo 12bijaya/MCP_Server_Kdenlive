@@ -70,15 +70,21 @@ def make_asset_id(path: Path) -> str:
 
 
 class MediaIndex:
-    """JSON-backed semantic index of imported media, keyed by asset id."""
+    """JSON-backed semantic index of imported media, keyed by asset id.
 
-    def __init__(self, index_path: Path):
+    Pass `index_path=None` for an in-memory-only index (e.g. while parsing
+    an existing Kdenlive project into the internal model, before the
+    caller has decided whether/where to persist it) -- upsert() then just
+    updates the in-memory dict and skips the disk write.
+    """
+
+    def __init__(self, index_path: Path | None):
         self.index_path = index_path
         self._assets: dict[str, MediaAsset] = {}
         self._load()
 
     def _load(self) -> None:
-        if self.index_path.exists():
+        if self.index_path is not None and self.index_path.exists():
             try:
                 raw = json.loads(self.index_path.read_text())
                 self._assets = {k: MediaAsset.from_dict(v) for k, v in raw.items()}
@@ -86,6 +92,8 @@ class MediaIndex:
                 self._assets = {}
 
     def _save(self) -> None:
+        if self.index_path is None:
+            return
         self.index_path.parent.mkdir(parents=True, exist_ok=True)
         payload = {k: v.to_dict() for k, v in self._assets.items()}
         self.index_path.write_text(json.dumps(payload, indent=2))

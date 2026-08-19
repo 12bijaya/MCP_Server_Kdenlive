@@ -209,6 +209,11 @@ class KdenliveXmlWriter:
 
         master_track_order = ["producer0"] + [track_tractor_id[t.id] for t in sequence.audio_tracks()] \
             + [track_tractor_id[t.id] for t in sequence.video_tracks()]
+        track_position: dict[str, int] = {"producer0": 0}
+        for pos, t in enumerate(sequence.audio_tracks(), start=1):
+            track_position[t.id] = pos
+        for pos, t in enumerate(sequence.video_tracks(), start=1 + len(sequence.audio_tracks())):
+            track_position[t.id] = pos
 
         master = _sub(mlt, "tractor", id="{%s}" % _pad_uuid(project.id),
                        **{"in": "00:00:00.000"}, out=frames_to_timecode(max(1, sequence.duration()), settings.fps))
@@ -246,7 +251,44 @@ class KdenliveXmlWriter:
             _prop(t, "kdenlive_id", "qtblend")
             _prop(t, "always_active", "1")
 
+        self._write_creative_transitions(master, sequence, track_position, settings)
+
         return mlt
+
+    def _write_creative_transitions(self, master: ET.Element, sequence: Sequence,
+                                     track_position: dict[str, int], settings) -> None:
+        """Emits transitions added via sequence.transitions (crossfade, wipe,
+        etc. from core.transitions.model) -- distinct from the always-on
+        background compositing transitions written above. Each one is
+        bounded to its [position, position+duration) span via in/out, unlike
+        the always_active background transitions."""
+        for t in sequence.transitions:
+            a_track = track_position.get(t.a_track) if t.a_track else None
+            b_track = track_position.get(t.b_track) if t.b_track else None
+            if a_track is None and t.clip_a_id:
+                found = sequence.get_clip(t.clip_a_id)
+                if found:
+                    a_track = track_position.get(found[0].id)
+            if b_track is None and t.clip_b_id:
+                found = sequence.get_clip(t.clip_b_id)
+                if found:
+                    b_track = track_position.get(found[0].id)
+            if a_track is None or b_track is None:
+                raise InvalidOperationError(
+                    f"Transition '{t.id}' could not resolve both tracks "
+                    f"(a_track={t.a_track!r}, b_track={t.b_track!r}, "
+                    f"clip_a_id={t.clip_a_id!r}, clip_b_id={t.clip_b_id!r})",
+                )
+
+            el = _sub(master, "transition", id=self.ids.next("transition"),
+                      **{"in": frames_to_timecode(t.position, settings.fps)},
+                      out=frames_to_timecode(max(t.position, t.position + t.duration - 1), settings.fps))
+            _prop(el, "a_track", str(a_track))
+            _prop(el, "b_track", str(b_track))
+            _prop(el, "mlt_service", t.service)
+            _prop(el, "kdenlive_id", t.service)
+            for key, value in t.params.items():
+                _prop(el, key, str(value))
 
     # ------------------------------------------------------------- bins --
 
