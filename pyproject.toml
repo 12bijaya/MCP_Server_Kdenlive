@@ -1,0 +1,31 @@
+[project]
+name = "kdenlive-mcp"
+version = "0.1.0"
+description = "Professional AI video-editing MCP server that drives Kdenlive through a structured timeline model"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "pydantic>=2.0",
+    "numpy",
+    "scipy",
+    "librosa",
+    "soundfile",
+    "Pillow",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio"]
+
+[project.scripts]
+kdenlive-mcp = "kdenlive_mcp.server:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
