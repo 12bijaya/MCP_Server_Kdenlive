@@ -127,7 +127,7 @@ class KdenliveXmlParser:
         for producer in self.root.findall("producer"):
             props = _props(producer)
             service = props.get("mlt_service", "")
-            if service in ("qimage", "pixbuf", "avformat", "avformat-novalidate"):
+            if service in ("qimage", "pixbuf", "avformat", "avformat-novalidate", "timewarp"):
                 self._index_media_producer(producer, settings, index, folder_names, is_chain=False)
         return index
 
@@ -151,10 +151,32 @@ class KdenliveXmlParser:
         if not resource or resource in ("black", "0x00000000") or resource.startswith("0x"):
             return
         service = props.get("mlt_service", "")
+
+        speed = 1.0
+        if service == "timewarp":
+            # resource is "<speed>:<real_resource>" (MLT's timewarp producer
+            # format, e.g. "2.0:clip.mp4") -- unwrap it so the asset is
+            # keyed by the real underlying file (same asset_id as any
+            # normal-speed instance of it) and stash the speed for
+            # _parse_entry to apply to the Clip it builds.
+            speed_str, _, real_resource = resource.partition(":")
+            try:
+                speed = float(speed_str)
+            except ValueError:
+                speed = 1.0
+            resource = real_resource
+            el.set("_kdenlive_mcp_speed", str(speed))
+
         kind = "image" if service == "qimage" or service == "pixbuf" else "video"
 
         length_frames = _parse_length_frames(props.get("length"), settings.fps)
         duration = length_frames / settings.fps_float if length_frames and kind != "image" else 0.0
+        if service == "timewarp":
+            # `length` on a timewarp producer is in its own (sped-up/down)
+            # output frame space; scale back to the true source duration so
+            # this doesn't clobber a correct value from another instance of
+            # the same asset with a wrong one when both get indexed.
+            duration *= abs(speed)
 
         path = Path(resource)
         if not path.is_absolute() and self._root_dir is not None:
@@ -294,6 +316,18 @@ class KdenliveXmlParser:
         producer_props = _props(producer_el) if producer_el is not None else {}
         service = producer_props.get("mlt_service", "")
 
+        speed = 1.0
+        if producer_el is not None and producer_el.get("_kdenlive_mcp_speed"):
+            speed = float(producer_el.get("_kdenlive_mcp_speed"))
+            # The entry's in/out are in the timewarp producer's own output
+            # frame space (source_frames/speed) -- see xml_writer's mirror
+            # of this same conversion; scale back up to true source frames
+            # so the internal model's in_point/out_point stay meaningful
+            # (verified by hand against melt, see core.timeline.ops.
+            # set_clip_speed's docstring for the reasoning).
+            in_point = round(in_point * abs(speed))
+            out_point = round(out_point * abs(speed))
+
         if asset_id:
             asset = media_index.get(asset_id)
             if asset and asset.kind == "image":
@@ -315,7 +349,7 @@ class KdenliveXmlParser:
         clip = Clip(
             id=new_id("clip"), track_id=track_id, clip_type=clip_type,
             position=position, in_point=in_point, out_point=out_point,
-            asset_id=asset_id,
+            asset_id=asset_id, speed=speed,
         )
         if clip_type == "color":
             clip.color = "#" + producer_props.get("resource", "000000ff").replace("0x", "")

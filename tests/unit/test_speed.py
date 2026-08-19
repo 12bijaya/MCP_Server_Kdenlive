@@ -98,6 +98,44 @@ def test_speed_ramp_without_ripple_raises_when_it_does_not_fit():
     assert len(v1.clips) == 1
 
 
+def test_sped_up_clip_round_trips_through_writer_and_parser():
+    """Regression test: the writer emitted timewarp producers for sped-up
+    clips, but the parser never learned to recognize them at all --
+    re-opening a project with a speed change lost the clip's asset_id
+    entirely (fell through to None), found by hand while actually applying
+    a speed ramp to a real project through this pipeline twice in a row.
+    """
+    if not REAL_CLIP.exists():
+        pytest.skip("real clip not found on this machine")
+    from kdenlive_mcp.kdenlive.adapter.xml_parser import KdenliveXmlParser
+
+    project, seq, v1, clip, media_index = _project_with_real_clip()
+    ops.set_clip_speed(project, seq.id, clip.id, speed=2.0)
+    original_in, original_out = clip.in_point, clip.out_point
+
+    home_tmp = Path.home() / ".kdenlive-mcp" / "test_scratch" / uuid.uuid4().hex
+    home_tmp.mkdir(parents=True)
+    try:
+        out_path = home_tmp / "project.kdenlive"
+        KdenliveXmlWriter(project, media_index).write(out_path)
+
+        parser = KdenliveXmlParser(out_path.read_text(), source_path=out_path)
+        reparsed_project, reparsed_index = parser.parse_project()
+        reparsed_clip = reparsed_project.sequences[0].video_tracks()[0].clips[0]
+
+        assert reparsed_clip.asset_id is not None, "asset_id must survive a timewarp round trip"
+        assert reparsed_clip.speed == pytest.approx(2.0, abs=0.01)
+        assert reparsed_clip.in_point == pytest.approx(original_in, abs=1)
+        assert reparsed_clip.out_point == pytest.approx(original_out, abs=1)
+
+        reparsed_asset = reparsed_index.get(reparsed_clip.asset_id)
+        assert reparsed_asset is not None
+        assert reparsed_asset.duration == pytest.approx(9.983, abs=0.05), \
+            "asset duration must be the true source duration, not the sped-up producer's own warped length"
+    finally:
+        shutil.rmtree(home_tmp, ignore_errors=True)
+
+
 @pytest.mark.skipif(not is_available("melt"), reason="melt not available on this machine")
 def test_sped_up_clip_actually_renders_at_the_expected_duration():
     if not REAL_CLIP.exists():
