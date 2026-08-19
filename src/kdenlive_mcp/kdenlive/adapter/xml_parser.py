@@ -43,6 +43,22 @@ def _parse_bool(s: str | None, default: bool = False) -> bool:
     return s.strip() in ("1", "true", "True")
 
 
+def _parse_length_frames(value: str | None, fps) -> int:
+    """The "length" property is usually a plain frame count, but some
+    producers (seen on real color/qimage clips) store it as a timecode
+    string like "00:00:05.000" instead. Handle both."""
+    if not value:
+        return 0
+    value = value.strip()
+    if ":" in value:
+        from kdenlive_mcp.core.timeline.timecode import timecode_to_frames
+        return timecode_to_frames(value, fps)
+    try:
+        return int(value)
+    except ValueError:
+        return 0
+
+
 class KdenliveXmlParser:
     def __init__(self, xml_text: str, *, source_path: Path | None = None):
         self.root = ET.fromstring(xml_text)
@@ -117,7 +133,7 @@ class KdenliveXmlParser:
         service = props.get("mlt_service", "")
         kind = "image" if service == "qimage" or service == "pixbuf" else "video"
 
-        length_frames = int(props.get("length", "0") or 0)
+        length_frames = _parse_length_frames(props.get("length"), settings.fps)
         duration = length_frames / settings.fps_float if length_frames and kind != "image" else 0.0
 
         path = Path(resource)
@@ -205,8 +221,7 @@ class KdenliveXmlParser:
         cursor = 0
         for child in playlist_el:
             if child.tag == "blank":
-                length = int(child.get("length", "0") or 0)
-                cursor += length
+                cursor += _parse_length_frames(child.get("length"), settings.fps)
             elif child.tag == "entry":
                 clip = self._parse_entry(child, cursor, track.id, settings, media_index, track_type=track.track_type)
                 if clip is not None:
@@ -274,8 +289,9 @@ class KdenliveXmlParser:
         disabled = props.pop("disable", None) == "1"
         effect = EffectInstance(id=new_id("effect"), service=service, display_name=service, enabled=not disabled)
         for key, value in props.items():
-            if ";" in value and "=" in value:
-                effect.params[key] = value  # raw animation string; not decomposed into KeyframeTrack here
-            else:
-                effect.params[key] = value
+            # Values that look like "frame=val;frame=val" animation strings
+            # are kept as raw params rather than decomposed into a
+            # KeyframeTrack here; the writer passes any string param
+            # through verbatim, so this round-trips correctly either way.
+            effect.params[key] = value
         return effect

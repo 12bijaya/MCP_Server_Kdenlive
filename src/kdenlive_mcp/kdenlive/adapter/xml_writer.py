@@ -61,6 +61,11 @@ def _fmt_num(v: float | int) -> str:
 def _fmt_value(value) -> str:
     if isinstance(value, (tuple, list)):
         return " ".join(_fmt_num(v) for v in value)
+    if isinstance(value, str):
+        # Already text: a plugin/service id, a color, a pre-built animation
+        # string round-tripped from an existing project, etc. -- only
+        # numeric Python values go through _fmt_num's number formatting.
+        return value
     return _fmt_num(value)
 
 
