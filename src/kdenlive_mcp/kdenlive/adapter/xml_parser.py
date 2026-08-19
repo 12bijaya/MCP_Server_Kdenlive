@@ -199,7 +199,35 @@ class KdenliveXmlParser:
                 audio_index += 1
             sequence.tracks.append(track)
 
+        self._parse_subtitles(seq_el, sequence, settings)
         return sequence
+
+    def _parse_subtitles(self, seq_el: ET.Element, sequence: Sequence, settings: ProjectSettings) -> None:
+        """Subtitles live in a sibling .srt file referenced by an
+        avfilter.subtitles filter on the sequence tractor -- see
+        xml_writer._write_subtitles for the ground truth this mirrors."""
+        for flt in seq_el.findall("filter"):
+            fprops = _props(flt)
+            if fprops.get("mlt_service") != "avfilter.subtitles":
+                continue
+            srt_path = fprops.get("av.filename")
+            if not srt_path:
+                continue
+            candidate = Path(srt_path)
+            if not candidate.is_absolute() and self._root_dir is not None:
+                candidate = self._root_dir / candidate
+            if not candidate.exists() and self.source_path is not None:
+                # Fall back to "<this project's path>.srt" -- the filter
+                # may still point at Kdenlive's live-editing temp copy
+                # (e.g. /tmp/....srt) rather than the persisted sibling.
+                sibling = Path(str(self.source_path) + ".srt")
+                if sibling.exists():
+                    candidate = sibling
+            if not candidate.exists():
+                continue
+            from kdenlive_mcp.core.subtitles.srt import parse_srt
+            sequence.subtitles.extend(parse_srt(candidate.read_text(encoding="utf-8"), settings.fps))
+            return
 
     def _parse_track(self, tractor_el: ET.Element, settings: ProjectSettings, media_index: MediaIndex) -> Track | None:
         props = _props(tractor_el)

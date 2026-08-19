@@ -123,16 +123,23 @@ class KdenliveXmlWriter:
         self._asset_chain_id: dict[str, str] = {}
         self._asset_bin_id: dict[str, int] = {}
         self._color_producer_id: dict[str, str] = {}
+        self._target_path: Path | None = None
 
     # ------------------------------------------------------------ public -
 
-    def to_string(self) -> str:
+    def to_string(self, *, target_path: Path | None = None) -> str:
+        """`target_path` (the eventual .kdenlive location, if known) is
+        needed to place the sibling <name>.kdenlive.srt subtitle file at
+        the right path; without it (e.g. building an in-memory-only XML
+        string) subtitles are silently omitted rather than guessing a path
+        -- see _write_subtitles."""
+        self._target_path = target_path
         root = self._build()
         ET.indent(root, space=" ")
         return ET.tostring(root, encoding="unicode", xml_declaration=False)
 
     def write(self, path: Path) -> None:
-        xml_text = "<?xml version='1.0' encoding='utf-8'?>\n" + self.to_string() + "\n"
+        xml_text = "<?xml version='1.0' encoding='utf-8'?>\n" + self.to_string(target_path=path) + "\n"
         path.write_text(xml_text, encoding="utf-8")
 
     # ----------------------------------------------------------- builder -
@@ -257,8 +264,34 @@ class KdenliveXmlWriter:
             _prop(t, "always_active", "1")
 
         self._write_creative_transitions(master, sequence, track_position, settings)
+        self._write_subtitles(master, sequence, settings)
 
         return mlt
+
+    def _write_subtitles(self, master: ET.Element, sequence: Sequence, settings) -> None:
+        """Kdenlive stores a sequence's subtitles as a sibling
+        <name>.kdenlive.srt file (never inline in the XML), referenced by
+        an `avfilter.subtitles` filter on the sequence tractor -- ground
+        truth taken from KDE's own dev-docs/fileformat.md, not guessed.
+        Silently skipped if there's no known target path to place the
+        sibling file next to (see to_string's target_path parameter)."""
+        if not sequence.subtitles:
+            return
+        if self._target_path is not None:
+            srt_path = Path(str(self._target_path) + ".srt")
+        elif self.project.path:
+            srt_path = Path(self.project.path + ".srt")
+        else:
+            return
+
+        from kdenlive_mcp.core.subtitles.srt import format_srt
+        srt_path.write_text(format_srt(sequence.subtitles, settings.fps), encoding="utf-8")
+
+        flt = _sub(master, "filter", id=self.ids.next("filter"))
+        _prop(flt, "mlt_service", "avfilter.subtitles")
+        _prop(flt, "internal_added", "237")
+        _prop(flt, "av.filename", str(srt_path))
+        _prop(flt, "kdenlive:locked", "0")
 
     def _write_creative_transitions(self, master: ET.Element, sequence: Sequence,
                                      track_position: dict[str, int], settings) -> None:

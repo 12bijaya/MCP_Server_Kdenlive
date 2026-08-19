@@ -146,6 +146,18 @@ class Marker:
 
 
 @dataclass
+class Subtitle:
+    """One subtitle entry. Kdenlive stores the whole subtitle track as a
+    sibling .srt file (not inline in the .kdenlive XML) referenced by an
+    `avfilter.subtitles` filter on the sequence -- see kdenlive/adapter.
+    """
+    id: str
+    start_frame: int
+    end_frame: int
+    text: str
+
+
+@dataclass
 class Track:
     id: str
     index: int  # 0 = bottom-most / lowest z-order within its type, matching MLT track order
@@ -211,6 +223,7 @@ class Sequence:
     tracks: list[Track] = field(default_factory=list)
     transitions: list[TransitionInstance] = field(default_factory=list)
     markers: list[Marker] = field(default_factory=list)
+    subtitles: list[Subtitle] = field(default_factory=list)
 
     def video_tracks(self) -> list[Track]:
         return sorted((t for t in self.tracks if t.track_type == "video"), key=lambda t: t.index)
@@ -230,6 +243,15 @@ class Sequence:
             if c:
                 return t, c
         return None
+
+    def get_subtitle(self, subtitle_id: str) -> Subtitle | None:
+        for s in self.subtitles:
+            if s.id == subtitle_id:
+                return s
+        return None
+
+    def sorted_subtitles(self) -> list[Subtitle]:
+        return sorted(self.subtitles, key=lambda s: s.start_frame)
 
     def duration(self) -> int:
         return max((t.duration() for t in self.tracks), default=0)
