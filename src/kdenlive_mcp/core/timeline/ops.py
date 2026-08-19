@@ -530,3 +530,126 @@ def replace_scene(
         asset_id=asset_id, clip_type=clip_type, name=name,
     )
     return new_clip, removed_ids
+
+
+# ------------------------------------------------------------------ speed -
+
+_MLT_SPEED_RANGE = (0.01, 20.0)  # MLT's own documented range for the timewarp producer
+
+
+def _validate_speed(speed: float) -> None:
+    if not (_MLT_SPEED_RANGE[0] <= abs(speed) <= _MLT_SPEED_RANGE[1]):
+        raise InvalidOperationError(
+            f"speed {speed} is outside MLT's supported range "
+            f"({_MLT_SPEED_RANGE[0]}-{_MLT_SPEED_RANGE[1]}, negative for reverse)"
+        )
+
+
+def _ripple_after(seq: Sequence, track: Track, from_frame: int, delta: int, *, exclude: set[str]) -> None:
+    if delta == 0:
+        return
+    for c in track.clips:
+        if c.id in exclude:
+            continue
+        if c.position >= from_frame:
+            c.position += delta
+
+
+def set_clip_speed(project: Project, sequence_id: str, clip_id: str, *, speed: float, ripple: bool = True) -> Clip:
+    """Changes a clip's constant playback speed (>1 = faster, <1 = slower
+    motion / "velocity", negative = reverse). Written out via MLT's real
+    `timewarp` producer, not a cosmetic property -- this actually changes
+    play speed in the rendered/opened project. Since speed changes the
+    clip's timeline duration (source_length/speed), clips after it on the
+    same track are shifted to absorb the change unless ripple=False.
+    """
+    _validate_speed(speed)
+    seq = _sequence(project, sequence_id)
+    track, clip = _clip(seq, clip_id)
+    if not clip.asset_id or clip.clip_type == "image":
+        raise InvalidOperationError("Only video/audio clips backed by a real asset have a playback speed")
+
+    old_end = clip.end
+    new_length = max(1, round(clip.source_length / abs(speed)))
+    delta = new_length - clip.timeline_length
+    if delta != 0 and not ripple:
+        _check_overlap(track, clip.position, new_length, exclude_clip_id=clip.id)
+
+    clip.speed = speed
+    if delta != 0 and ripple:
+        _ripple_after(seq, track, old_end, delta, exclude={clip.id})
+    _mark_dirty(project)
+    return clip
+
+
+def create_speed_ramp(project: Project, sequence_id: str, clip_id: str, *,
+                       segment_speeds: list[float], ripple: bool = True) -> list[Clip]:
+    """Splits a clip into len(segment_speeds) equal-source-length segments,
+    each with its own constant speed -- a real, widely-used "speed ramp via
+    cuts" technique (e.g. [1.0, 0.4, 2.0, 1.0] for normal -> slow-mo ->
+    fast -> normal). True continuous speed remapping within a single
+    unbroken clip needs MLT's `timeremap` filter, which isn't available in
+    the installed melt build on this machine (checked directly), so this
+    is the honest, actually-achievable version of a speed ramp here.
+
+    Clips after the ramp on the same track are shifted to absorb any
+    overall duration change unless ripple=False (in which case this raises
+    if the ramp doesn't fit in the original span).
+    """
+    if len(segment_speeds) < 2:
+        raise InvalidOperationError("segment_speeds needs at least 2 values to form a ramp")
+    for s in segment_speeds:
+        _validate_speed(s)
+
+    seq = _sequence(project, sequence_id)
+    track, clip = _clip(seq, clip_id)
+    if not clip.asset_id or clip.clip_type == "image":
+        raise InvalidOperationError("Only video/audio clips backed by a real asset can be speed-ramped")
+
+    original_position = clip.position
+    original_timeline_length = clip.timeline_length
+    original_in, original_out = clip.in_point, clip.out_point
+    n = len(segment_speeds)
+    chunk = (original_out - original_in) / n
+
+    # Compute every segment's (in, out, timeline_length) first, without
+    # mutating anything, so a ripple=False rejection never leaves the model
+    # half-split.
+    segments: list[tuple[int, int, int]] = []
+    cursor_source = original_in
+    for i, seg_speed in enumerate(segment_speeds):
+        seg_in = cursor_source
+        seg_out = original_out if i == n - 1 else original_in + round(chunk * (i + 1))
+        seg_length = max(1, round((seg_out - seg_in) / abs(seg_speed)))
+        segments.append((seg_in, seg_out, seg_length))
+        cursor_source = seg_out
+
+    new_total_length = sum(length for _, _, length in segments)
+    delta = new_total_length - original_timeline_length
+    if delta != 0 and not ripple:
+        raise InvalidOperationError(
+            f"Speed ramp changes this clip's total duration by {delta} frames; "
+            f"pass ripple=True (default) or make room manually first",
+        )
+
+    clip.speed = segment_speeds[0]
+    clip.out_point = segments[0][1]
+    pieces = [clip]
+    cursor_position = clip.position + clip.timeline_length
+
+    for i in range(1, n):
+        seg_in, seg_out, _ = segments[i]
+        new_clip = Clip(
+            id=new_id("clip"), track_id=track.id, clip_type=clip.clip_type,
+            position=cursor_position, in_point=seg_in, out_point=seg_out,
+            asset_id=clip.asset_id, speed=segment_speeds[i], name=clip.name,
+        )
+        track.clips.append(new_clip)
+        pieces.append(new_clip)
+        cursor_position += new_clip.timeline_length
+
+    if delta != 0:
+        _ripple_after(seq, track, original_position + original_timeline_length, delta,
+                       exclude={p.id for p in pieces})
+    _mark_dirty(project)
+    return pieces

@@ -489,12 +489,21 @@ class KdenliveXmlWriter:
                 asset = self.media_index.get(clip.asset_id)
                 if asset is None:
                     continue
-                self._clip_placement_id[clip.id] = self._new_placement_producer(mlt, asset)
+                self._clip_placement_id[clip.id] = self._new_placement_producer(mlt, asset, clip.speed)
 
-    def _new_placement_producer(self, mlt: ET.Element, asset: MediaAsset) -> str:
+    def _new_placement_producer(self, mlt: ET.Element, asset: MediaAsset, speed: float = 1.0) -> str:
+        """speed != 1.0 wraps the placement in MLT's real `timewarp`
+        producer (resource becomes "<speed>:<path>", mlt_service becomes
+        "timewarp") -- confirmed by hand with melt that this producer's own
+        in/out (and therefore the playlist entry referencing it) must be
+        expressed in ITS OWN output frame space, i.e. source_frames/speed,
+        not the raw source frame numbers; see _write_track_clips. Images
+        have no meaningful playback speed, so this is skipped for them.
+        """
         settings = self.project.settings
         bin_id = self._asset_bin_id[asset.id]
         control_uuid = self._asset_control_uuid[asset.id]
+        warp = asset.kind != "image" and speed != 1.0
 
         if asset.kind == "image":
             producer_id = self.ids.next("producer")
@@ -510,12 +519,18 @@ class KdenliveXmlWriter:
             return producer_id
 
         dur_frames = max(1, round(asset.duration * settings.fps_float)) if asset.duration else 1
-        chain_id = self.ids.next("chain")
-        el = _sub(mlt, "chain", id=chain_id, out=frames_to_timecode(dur_frames - 1, settings.fps))
-        _prop(el, "length", str(dur_frames))
+        warped_dur_frames = max(1, round(dur_frames / abs(speed))) if warp else dur_frames
+        chain_tag = "producer" if warp else "chain"
+        chain_id = self.ids.next("producer" if warp else "chain")
+        el = _sub(mlt, chain_tag, id=chain_id, out=frames_to_timecode(warped_dur_frames - 1, settings.fps))
+        _prop(el, "length", str(warped_dur_frames))
         _prop(el, "eof", "pause")
-        _prop(el, "resource", asset.path)
-        _prop(el, "mlt_service", "avformat-novalidate")
+        if warp:
+            _prop(el, "resource", f"{speed:g}:{asset.path}")
+            _prop(el, "mlt_service", "timewarp")
+        else:
+            _prop(el, "resource", asset.path)
+            _prop(el, "mlt_service", "avformat-novalidate")
         _prop(el, "seekable", "1")
         _prop(el, "video_index", "0" if asset.has_video else "-1")
         _prop(el, "audio_index", ("1" if asset.has_video else "0") if asset.has_audio else "-1")
@@ -592,9 +607,21 @@ class KdenliveXmlWriter:
                     f"Overlapping clips on track '{track.id}' at frame {clip.position}",
                 )
             producer_ref = self._producer_ref(clip)
+            warped = bool(clip.asset_id) and clip.clip_type != "image" and clip.speed != 1.0
+            if warped:
+                # The referenced producer is a timewarp wrapper (see
+                # _new_placement_producer); its own frame numbering is
+                # source_frames/speed, confirmed by hand against melt --
+                # the entry's in/out must be expressed in that space, not
+                # raw source frame numbers.
+                entry_in = round(clip.in_point / abs(clip.speed))
+                entry_out = max(entry_in, round(clip.out_point / abs(clip.speed)) - 1)
+            else:
+                entry_in = clip.in_point
+                entry_out = max(clip.in_point, clip.out_point - 1)
             entry = _sub(playlist, "entry", producer=producer_ref,
-                         **{"in": frames_to_timecode(clip.in_point, settings.fps)},
-                         out=frames_to_timecode(max(clip.in_point, clip.out_point - 1), settings.fps))
+                         **{"in": frames_to_timecode(entry_in, settings.fps)},
+                         out=frames_to_timecode(entry_out, settings.fps))
             bin_id = self._asset_bin_id.get(clip.asset_id) if clip.asset_id else None
             if bin_id is not None:
                 _prop(entry, "kdenlive:id", str(bin_id))

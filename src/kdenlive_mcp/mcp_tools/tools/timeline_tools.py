@@ -354,3 +354,34 @@ def register(mcp: FastMCP) -> None:
             asset_id=asset_id, clip_type="video", name=name,
         )
         return tool_result(clip=clip_summary(new_clip, p), removed_clip_ids=removed_ids)
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def set_clip_speed(clip_id: str, speed: float, ripple: bool = True,
+                        sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """Change a clip's constant playback speed/velocity: >1 = faster, <1 = slower
+        motion, negative = reverse (range 0.01-20). This is a real speed change (MLT's
+        timewarp producer), not cosmetic. Changes the clip's timeline duration; clips
+        after it on the same track shift to absorb that unless ripple=False."""
+        session = get_state().get(project_id)
+        p = session.project
+        clip = ops.set_clip_speed(p, _seq_id(session, sequence_id), clip_id, speed=speed, ripple=ripple)
+        return tool_result(clip=clip_summary(clip, p))
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def create_speed_ramp(clip_id: str, segment_speeds: list[float], ripple: bool = True,
+                           sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """Split a clip into len(segment_speeds) equal-source-length segments, each with
+        its own constant speed -- e.g. [1.0, 0.4, 2.0, 1.0] for normal -> slow-mo -> fast
+        -> normal. This is a real "speed ramp via cuts", the actually-achievable version
+        of a speed ramp (true continuous remapping needs an MLT filter not available in
+        this install). Clips after it on the same track shift to absorb any overall
+        duration change unless ripple=False."""
+        session = get_state().get(project_id)
+        p = session.project
+        pieces = ops.create_speed_ramp(p, _seq_id(session, sequence_id), clip_id,
+                                        segment_speeds=segment_speeds, ripple=ripple)
+        return tool_result(clips=[clip_summary(c, p) for c in pieces])
