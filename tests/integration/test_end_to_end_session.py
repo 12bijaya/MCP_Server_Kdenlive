@@ -58,7 +58,16 @@ def tools(tmp_path, monkeypatch):
                    effects_tools, transitions_tools, audio_tools, capability_tools,
                    snapshot_tools):
         module.register(bag)
-    return bag.tools
+    try:
+        yield bag.tools
+    finally:
+        # Config is a cached global singleton computed once from env vars;
+        # monkeypatch reverts the env vars at teardown but that alone
+        # leaves the *already-built* Config object (with this test's
+        # /tmp-based workspace baked in) cached for whatever test runs
+        # next. Reset it so the next test rebuilds Config from the real
+        # environment instead of inheriting this one's paths.
+        config_module._config = None
 
 
 def _require_real_clip():

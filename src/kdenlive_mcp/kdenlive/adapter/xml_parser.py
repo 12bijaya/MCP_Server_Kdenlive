@@ -65,6 +65,11 @@ class KdenliveXmlParser:
         if self.root.tag != "mlt":
             raise ValidationError(f"Not a valid MLT/Kdenlive project: root tag is <{self.root.tag}>, expected <mlt>")
         self.source_path = source_path
+        # <mlt root="..."> is the base dir non-absolute `resource` paths are
+        # relative to (seen on real autosave files, where clip paths are
+        # written relative to the project's root rather than absolute).
+        root_attr = self.root.get("root")
+        self._root_dir = Path(root_attr) if root_attr else None
         self._elements_by_id: dict[str, ET.Element] = {}
         for el in self.root.iter():
             eid = el.get("id")
@@ -137,6 +142,8 @@ class KdenliveXmlParser:
         duration = length_frames / settings.fps_float if length_frames and kind != "image" else 0.0
 
         path = Path(resource)
+        if not path.is_absolute() and self._root_dir is not None:
+            path = self._root_dir / path
         asset = MediaAsset(
             id=make_asset_id(path) if path.is_absolute() else new_id("asset"),
             path=str(path),

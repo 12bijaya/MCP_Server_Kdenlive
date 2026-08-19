@@ -30,9 +30,15 @@ def create_project(name: str, *, resolution: str = "1080p", fps: str | float = "
 
 
 def open_project(path: str) -> tuple[Project, MediaIndex]:
+    """Opens any file whose *content* is valid Kdenlive/MLT XML (root tag
+    <mlt>) -- not just files named "*.kdenlive". Kdenlive's own autosave
+    files (KAutoSaveFile-style, e.g. "_untitled.kdenlivewtpfile_...") are
+    real project XML but never have a .kdenlive extension, so gating on
+    the extension would make it impossible to inspect an unsaved live
+    session's autosaved state. KdenliveXmlParser itself rejects anything
+    whose root tag isn't <mlt>, which is the real validation that matters.
+    """
     resolved = resolve_source_path(path)
-    if resolved.suffix != ".kdenlive":
-        raise ValidationError(f"Not a .kdenlive project file: {path}")
     xml_text = resolved.read_text(encoding="utf-8")
     parser = KdenliveXmlParser(xml_text, source_path=resolved)
     return parser.parse_project(project_name=resolved.stem)

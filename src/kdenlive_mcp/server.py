@@ -16,6 +16,7 @@ from kdenlive_mcp.mcp_tools.tools import (
     media_tools,
     motion_tools,
     project_tools,
+    render_tools,
     snapshot_tools,
     timeline_tools,
     transitions_tools,
@@ -38,7 +39,7 @@ def build_server() -> FastMCP:
     for module in (
         project_tools, media_tools, timeline_tools, motion_tools,
         effects_tools, transitions_tools, audio_tools, capability_tools,
-        snapshot_tools,
+        snapshot_tools, render_tools,
     ):
         module.register(mcp)
     return mcp
