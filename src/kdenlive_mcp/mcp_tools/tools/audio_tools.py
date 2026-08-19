@@ -11,6 +11,7 @@ from kdenlive_mcp.core.audio.beats import (
     detect_music_sections, detect_silence,
 )
 from kdenlive_mcp.core.audio.waveform import analyze_waveform
+from kdenlive_mcp.core.effects.model import create_effect
 from kdenlive_mcp.core.timeline.timecode import seconds_to_frames
 from kdenlive_mcp.errors import ClipNotFoundError, InvalidOperationError
 from kdenlive_mcp.mcp_tools.state import get_state
@@ -217,3 +218,53 @@ def register(mcp: FastMCP) -> None:
     def list_sfx_categories() -> dict:
         """List the supported SFX categories."""
         return tool_result(categories=SFX_CATEGORIES)
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def set_clip_volume(clip_id: str, level_db: float, sequence_id: str | None = None,
+                         project_id: str | None = None) -> dict:
+        """Set a clip's audio gain in dB (Kdenlive's real "volume" effect, level -100..50 dB, 0 = unchanged).
+        Reuses the clip's existing volume effect if it already has one."""
+        session = get_state().get(project_id)
+        project = session.project
+        seq = _seq(session, sequence_id)
+        found = seq.get_clip(clip_id)
+        if found is None:
+            raise ClipNotFoundError(f"Clip not found: {clip_id}")
+        _, clip = found
+        if not (-100 <= level_db <= 50):
+            raise InvalidOperationError("level_db must be between -100 and 50")
+
+        existing = next((e for e in clip.effects if e.service == "volume"), None)
+        if existing is not None:
+            existing.params["level"] = level_db
+        else:
+            effect = create_effect("volume", params={"level": level_db})
+            effect.index = clip.next_effect_index()
+            clip.effects.append(effect)
+        project.dirty = True
+        return tool_result(clip_id=clip_id, level_db=level_db)
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def normalize_clip_audio(clip_id: str, target_lufs: float = -23.0, sequence_id: str | None = None,
+                              project_id: str | None = None) -> dict:
+        """Apply loudness normalization to a clip (Kdenlive's real "dynamic_loudness" effect).
+        target_lufs: -50..-10, broadcast standard is -23 LUFS."""
+        session = get_state().get(project_id)
+        project = session.project
+        seq = _seq(session, sequence_id)
+        found = seq.get_clip(clip_id)
+        if found is None:
+            raise ClipNotFoundError(f"Clip not found: {clip_id}")
+        _, clip = found
+        if not (-50 <= target_lufs <= -10):
+            raise InvalidOperationError("target_lufs must be between -50 and -10")
+
+        effect = create_effect("dynamic_loudness", params={"target_loudness": target_lufs})
+        effect.index = clip.next_effect_index()
+        clip.effects.append(effect)
+        project.dirty = True
+        return tool_result(clip_id=clip_id, target_lufs=target_lufs, effect_id=effect.id)
