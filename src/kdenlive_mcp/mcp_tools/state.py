@@ -68,6 +68,17 @@ class ServerState:
 
     # ---------------------------------------------------------- undo/redo -
 
+    def undo_stack_depth(self, project_id: str) -> int:
+        """Number of checkpoints currently on a project's undo stack. Used
+        by execute_batch to roll back "however many checkpoints this batch
+        actually pushed" rather than "however many operations reported
+        success" -- @mutates checkpoints *before* a call runs, so a call
+        that fails still pushes one, and counting successes alone would
+        under-rollback whenever a batch's failing operation was itself a
+        mutating tool.
+        """
+        return len(self._undo_stacks.get(project_id, []))
+
     def checkpoint(self, project_id: str) -> None:
         """Push the project's current state onto its undo stack, e.g. right
         before a mutating tool applies an edit. Clears the redo stack, same

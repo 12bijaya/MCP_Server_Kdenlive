@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
+from kdenlive_mcp.mcp_tools import resources
 from kdenlive_mcp.mcp_tools.tools import (
     audio_tools,
     capability_tools,
@@ -16,6 +17,7 @@ from kdenlive_mcp.mcp_tools.tools import (
     media_tools,
     motion_tools,
     project_tools,
+    property_tools,
     render_tools,
     snapshot_tools,
     subtitle_tools,
@@ -40,9 +42,10 @@ def build_server() -> FastMCP:
     for module in (
         project_tools, media_tools, timeline_tools, motion_tools,
         effects_tools, transitions_tools, audio_tools, capability_tools,
-        snapshot_tools, render_tools, subtitle_tools,
+        snapshot_tools, render_tools, subtitle_tools, property_tools,
     ):
         module.register(mcp)
+    resources.register(mcp)
     return mcp
 
 

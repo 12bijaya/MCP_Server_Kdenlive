@@ -7,6 +7,7 @@ and a human both think in).
 from __future__ import annotations
 
 import functools
+import inspect
 from typing import Any, Callable
 
 from kdenlive_mcp.core.timeline.model import Clip, Project, Sequence, Track
@@ -18,18 +19,35 @@ def tool_result(**kwargs) -> dict[str, Any]:
     return {"success": True, **kwargs}
 
 
+def _error_dict(exc: Exception) -> dict[str, Any]:
+    if isinstance(exc, KdenliveMcpError):
+        return exc.to_dict()
+    return {"success": False, "error": {"code": "INTERNAL_ERROR", "message": str(exc)}}
+
+
 def catch_errors(fn: Callable) -> Callable:
+    """Wraps a tool function so it never raises: KdenliveMcpError and any
+    other exception both become a structured {"success": False, "error"}
+    dict instead. Handles both sync and async (e.g. execute_batch, which
+    awaits mcp.call_tool) tool functions -- wrapping an async def with a
+    plain sync wrapper would just hand back an un-awaited coroutine object
+    instead of running it.
+    """
+    if inspect.iscoroutinefunction(fn):
+        @functools.wraps(fn)
+        async def async_wrapper(*args, **kwargs):
+            try:
+                return await fn(*args, **kwargs)
+            except Exception as exc:  # noqa: BLE001 - last-resort guard so tools never crash the server
+                return _error_dict(exc)
+        return async_wrapper
+
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except KdenliveMcpError as exc:
-            return exc.to_dict()
         except Exception as exc:  # noqa: BLE001 - last-resort guard so tools never crash the server
-            return {
-                "success": False,
-                "error": {"code": "INTERNAL_ERROR", "message": str(exc)},
-            }
+            return _error_dict(exc)
     return wrapper
 
 
