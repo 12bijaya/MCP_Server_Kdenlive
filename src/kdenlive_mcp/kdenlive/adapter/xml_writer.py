@@ -134,7 +134,15 @@ class KdenliveXmlWriter:
         self._asset_control_uuid: dict[str, str] = {}
         self._clip_placement_id: dict[str, str] = {}  # clip.id -> its own dedicated timeline producer/chain
         self._color_producer_id: dict[str, str] = {}
+        self._folder_ids: dict[str, int] = {}  # folder name -> sequential kdenlive:folder.-1.<id>
         self._target_path: Path | None = None
+
+    def _folder_id_for(self, asset: MediaAsset) -> str:
+        if not asset.folder:
+            return "-1"
+        if asset.folder not in self._folder_ids:
+            self._folder_ids[asset.folder] = len(self._folder_ids)
+        return str(self._folder_ids[asset.folder])
 
     # ------------------------------------------------------------ public -
 
@@ -401,6 +409,8 @@ class KdenliveXmlWriter:
             _prop(main_bin, "kdenlive:docproperties.activetimeline", seq_uuid)
         for key, value in project.metadata.items():
             _prop(main_bin, f"kdenlive:docproperties.{key}", str(value))
+        for folder_name, folder_id in self._folder_ids.items():
+            _prop(main_bin, f"kdenlive:folder.-1.{folder_id}", folder_name)
         # Required for Kdenlive to find main_bin at all: it's fetched via
         # MLT's xml_retain mechanism off the final project tractor, not by
         # scanning the XML tree for <playlist id="main_bin">. See
@@ -446,7 +456,7 @@ class KdenliveXmlWriter:
             _prop(el, "audio_index", "-1")
         _prop(el, "kdenlive:id", str(bin_id))
         _prop(el, "kdenlive:control_uuid", control_uuid)
-        _prop(el, "kdenlive:folderid", "-1")
+        _prop(el, "kdenlive:folderid", self._folder_id_for(asset))
         if asset.size_bytes:
             _prop(el, "kdenlive:file_size", str(asset.size_bytes))
         self._asset_chain_id[asset.id] = chain_id
@@ -511,7 +521,7 @@ class KdenliveXmlWriter:
         _prop(el, "audio_index", ("1" if asset.has_video else "0") if asset.has_audio else "-1")
         _prop(el, "kdenlive:control_uuid", control_uuid)
         _prop(el, "kdenlive:id", str(bin_id))
-        _prop(el, "kdenlive:folderid", "-1")
+        _prop(el, "kdenlive:folderid", self._folder_id_for(asset))
         if asset.size_bytes:
             _prop(el, "kdenlive:file_size", str(asset.size_bytes))
         return chain_id

@@ -47,6 +47,7 @@ class MediaAsset:
     bit_rate: int | None = None
     thumbnail_path: str | None = None
     tags: list[str] = field(default_factory=list)
+    folder: str | None = None  # flat bin-organization folder name, e.g. "B-Roll"
     notes: str | None = None
     imported_at: float = field(default_factory=time.time)
     provenance: ProvenanceInfo | None = None
@@ -140,3 +141,9 @@ class MediaIndex:
             key = (asset.size_bytes, round(asset.duration, 2))
             by_size_dur.setdefault(key, []).append(asset)
         return [group for group in by_size_dur.values() if len(group) > 1]
+
+    def list_folders(self) -> list[str]:
+        return sorted({a.folder for a in self._assets.values() if a.folder})
+
+    def list_by_folder(self, folder: str | None) -> list[MediaAsset]:
+        return [a for a in self._assets.values() if a.folder == folder]

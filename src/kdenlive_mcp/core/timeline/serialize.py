@@ -14,7 +14,7 @@ from typing import Any
 
 from kdenlive_mcp.core.timeline.model import (
     Clip, Easing, EffectInstance, Keyframe, KeyframeTrack, Marker, Project,
-    ProjectSettings, Sequence, Track, TransitionInstance,
+    ProjectSettings, Sequence, Track, TransitionInstance, new_id,
 )
 
 
@@ -132,12 +132,12 @@ def _track_from_dict(d: dict) -> Track:
 
 
 def _marker_to_dict(m: Marker) -> dict:
-    return {"frame": m.frame, "name": m.name, "color": m.color, "category": m.category}
+    return {"id": m.id, "frame": m.frame, "name": m.name, "color": m.color, "category": m.category}
 
 
 def _marker_from_dict(d: dict) -> Marker:
-    return Marker(frame=d["frame"], name=d.get("name", ""), color=d.get("color", "#00ff00"),
-                  category=d.get("category", "default"))
+    return Marker(id=d.get("id") or new_id("marker"), frame=d["frame"], name=d.get("name", ""),
+                  color=d.get("color", "#00ff00"), category=d.get("category", "default"))
 
 
 def _sequence_to_dict(s: Sequence) -> dict:

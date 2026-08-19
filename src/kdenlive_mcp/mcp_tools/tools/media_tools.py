@@ -19,7 +19,7 @@ def _asset_dict(asset) -> dict:
         "width": asset.width, "height": asset.height, "fps": asset.fps, "orientation": asset.orientation,
         "has_audio": asset.has_audio, "has_video": asset.has_video, "video_codec": asset.video_codec,
         "audio_codec": asset.audio_codec, "sample_rate": asset.sample_rate, "size_bytes": asset.size_bytes,
-        "thumbnail_path": asset.thumbnail_path, "tags": asset.tags,
+        "thumbnail_path": asset.thumbnail_path, "tags": asset.tags, "folder": asset.folder,
     }
 
 
@@ -111,3 +111,43 @@ def register(mcp: FastMCP) -> None:
         for asset in session.media_index.list():
             by_kind.setdefault(asset.kind, []).append(asset.id)
         return tool_result(by_kind=by_kind, total=len(session.media_index.list()))
+
+    @mcp.tool()
+    @catch_errors
+    def create_bin_folder(name: str, project_id: str | None = None) -> dict:
+        """Create a bin folder by assigning it to at least a placeholder concept --
+        folders exist implicitly once an asset is put in them via set_media_folder;
+        this just confirms the name is usable and lists what's already in it."""
+        session = get_state().get(project_id)
+        existing = session.media_index.list_by_folder(name)
+        return tool_result(folder=name, asset_count=len(existing))
+
+    @mcp.tool()
+    @catch_errors
+    def set_media_folder(asset_id: str, folder: str | None, project_id: str | None = None) -> dict:
+        """Move an asset into a bin folder (or pass folder=null to clear it, moving it back to the root)."""
+        session = get_state().get(project_id)
+        asset = session.media_index.get(asset_id)
+        if asset is None:
+            raise InvalidOperationError(f"Asset not found: {asset_id}")
+        asset.folder = folder
+        session.media_index.upsert(asset)
+        return tool_result(asset=_asset_dict(asset))
+
+    @mcp.tool()
+    @catch_errors
+    def list_media_folders(project_id: str | None = None) -> dict:
+        """List every bin folder currently in use, with asset counts."""
+        session = get_state().get(project_id)
+        folders = session.media_index.list_folders()
+        return tool_result(folders=[
+            {"name": f, "asset_count": len(session.media_index.list_by_folder(f))} for f in folders
+        ], unfiled_count=len(session.media_index.list_by_folder(None)))
+
+    @mcp.tool()
+    @catch_errors
+    def list_media_by_folder(folder: str | None = None, project_id: str | None = None) -> dict:
+        """List assets in one bin folder (folder=null for unfiled assets at the root)."""
+        session = get_state().get(project_id)
+        assets = session.media_index.list_by_folder(folder)
+        return tool_result(assets=[_asset_dict(a) for a in assets])

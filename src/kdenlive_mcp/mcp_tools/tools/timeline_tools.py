@@ -10,6 +10,13 @@ from kdenlive_mcp.mcp_tools.state import get_state
 from kdenlive_mcp.mcp_tools.tools._common import catch_errors, mutates, clip_summary, f2s, s2f, tool_result, track_summary
 
 
+def _marker_summary(marker, project) -> dict:
+    return {
+        "id": marker.id, "frame": f2s(marker.frame, project), "name": marker.name,
+        "color": marker.color, "category": marker.category,
+    }
+
+
 def register(mcp: FastMCP) -> None:
 
     def _seq_id(session, sequence_id: str | None) -> str:
@@ -277,4 +284,73 @@ def register(mcp: FastMCP) -> None:
         p = session.project
         marker = ops.add_marker(p, _seq_id(session, sequence_id), frame=s2f(frame_seconds, p),
                                  name=name, color=color, category=category)
-        return tool_result(marker={"frame": f2s(marker.frame, p), "name": marker.name, "category": marker.category})
+        return tool_result(marker=_marker_summary(marker, p))
+
+    @mcp.tool()
+    @catch_errors
+    def list_markers(sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """List every marker in a sequence, ordered by time."""
+        session = get_state().get(project_id)
+        p = session.project
+        seq = p.get_sequence(_seq_id(session, sequence_id))
+        return tool_result(markers=[_marker_summary(m, p) for m in seq.markers])
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def remove_marker(marker_id: str, sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """Remove a marker."""
+        session = get_state().get(project_id)
+        ops.remove_marker(session.project, _seq_id(session, sequence_id), marker_id)
+        return tool_result(removed=marker_id)
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def remove_markers_by_category(category: str, sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """Remove every marker in a given category."""
+        session = get_state().get(project_id)
+        count = ops.remove_markers_by_category(session.project, _seq_id(session, sequence_id), category)
+        return tool_result(removed_count=count)
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def move_marker(marker_id: str, frame_seconds: float, sequence_id: str | None = None,
+                     project_id: str | None = None) -> dict:
+        """Move a marker to a new time."""
+        session = get_state().get(project_id)
+        p = session.project
+        marker = ops.move_marker(p, _seq_id(session, sequence_id), marker_id, frame=s2f(frame_seconds, p))
+        return tool_result(marker=_marker_summary(marker, p))
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def edit_marker(marker_id: str, name: str | None = None, color: str | None = None, category: str | None = None,
+                     sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """Change a marker's name/color/category."""
+        session = get_state().get(project_id)
+        p = session.project
+        marker = ops.edit_marker(p, _seq_id(session, sequence_id), marker_id, name=name, color=color, category=category)
+        return tool_result(marker=_marker_summary(marker, p))
+
+    @mcp.tool()
+    @catch_errors
+    @mutates
+    def replace_scene(track_id: str, start_seconds: float, end_seconds: float,
+                       asset_id: str, source_in: float, source_out: float, name: str = "",
+                       sequence_id: str | None = None, project_id: str | None = None) -> dict:
+        """Replace whatever occupies [start_seconds, end_seconds) on a track with a
+        new clip: clips fully inside the range are removed, clips partially
+        overlapping are trimmed at the boundary, and a clip that fully contains
+        the range gets split around it."""
+        session = get_state().get(project_id)
+        p = session.project
+        new_clip, removed_ids = ops.replace_scene(
+            p, _seq_id(session, sequence_id), track_id,
+            start_frame=s2f(start_seconds, p), end_frame=s2f(end_seconds, p),
+            in_point=s2f(source_in, p), out_point=s2f(source_out, p),
+            asset_id=asset_id, clip_type="video", name=name,
+        )
+        return tool_result(clip=clip_summary(new_clip, p), removed_clip_ids=removed_ids)

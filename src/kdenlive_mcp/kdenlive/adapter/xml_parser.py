@@ -120,17 +120,32 @@ class KdenliveXmlParser:
 
     def _build_media_index(self, settings: ProjectSettings) -> MediaIndex:
         index = MediaIndex(index_path=None)  # in-memory only; caller decides whether/where to persist
+        folder_names = self._parse_folder_names()
 
         for chain in self.root.findall("chain"):
-            self._index_media_producer(chain, settings, index, is_chain=True)
+            self._index_media_producer(chain, settings, index, folder_names, is_chain=True)
         for producer in self.root.findall("producer"):
             props = _props(producer)
             service = props.get("mlt_service", "")
             if service in ("qimage", "pixbuf", "avformat", "avformat-novalidate"):
-                self._index_media_producer(producer, settings, index, is_chain=False)
+                self._index_media_producer(producer, settings, index, folder_names, is_chain=False)
         return index
 
-    def _index_media_producer(self, el: ET.Element, settings: ProjectSettings, index: MediaIndex, *, is_chain: bool) -> None:
+    def _parse_folder_names(self) -> dict[str, str]:
+        """Reads main_bin's "kdenlive:folder.<parentId>.<folderId>" = name
+        properties (flat, root-level folders only -- parentId always -1)."""
+        main_bin = self.root.find("playlist[@id='main_bin']")
+        if main_bin is None:
+            return {}
+        names: dict[str, str] = {}
+        for key, value in _props(main_bin).items():
+            if key.startswith("kdenlive:folder.-1."):
+                folder_id = key.rsplit(".", 1)[-1]
+                names[folder_id] = value
+        return names
+
+    def _index_media_producer(self, el: ET.Element, settings: ProjectSettings, index: MediaIndex,
+                               folder_names: dict[str, str], *, is_chain: bool) -> None:
         props = _props(el)
         resource = props.get("resource")
         if not resource or resource in ("black", "0x00000000") or resource.startswith("0x"):
@@ -151,6 +166,7 @@ class KdenliveXmlParser:
             duration=duration,
             has_video=props.get("video_index", "0") != "-1",
             has_audio=props.get("audio_index", "-1") not in ("-1", ""),
+            folder=folder_names.get(props.get("kdenlive:folderid", "-1")),
         )
         index.upsert(asset)
         el.set("_kdenlive_mcp_asset_id", asset.id)

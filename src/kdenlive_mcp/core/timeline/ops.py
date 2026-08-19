@@ -429,8 +429,104 @@ def snap_to_beat(project: Project, sequence_id: str, clip_id: str, *, beat_frame
 
 def add_marker(project: Project, sequence_id: str, *, frame: int, name: str = "", color: str = "#00ff00", category: str = "default") -> Marker:
     seq = _sequence(project, sequence_id)
-    marker = Marker(frame=frame, name=name, color=color, category=category)
+    marker = Marker(id=new_id("marker"), frame=frame, name=name, color=color, category=category)
     seq.markers.append(marker)
     seq.markers.sort(key=lambda m: m.frame)
     _mark_dirty(project)
     return marker
+
+
+def _marker(seq: Sequence, marker_id: str) -> Marker:
+    for m in seq.markers:
+        if m.id == marker_id:
+            return m
+    raise InvalidOperationError(f"Marker not found: {marker_id}")
+
+
+def remove_marker(project: Project, sequence_id: str, marker_id: str) -> None:
+    seq = _sequence(project, sequence_id)
+    _marker(seq, marker_id)
+    seq.markers = [m for m in seq.markers if m.id != marker_id]
+    _mark_dirty(project)
+
+
+def remove_markers_by_category(project: Project, sequence_id: str, category: str) -> int:
+    seq = _sequence(project, sequence_id)
+    before = len(seq.markers)
+    seq.markers = [m for m in seq.markers if m.category != category]
+    removed = before - len(seq.markers)
+    if removed:
+        _mark_dirty(project)
+    return removed
+
+
+def move_marker(project: Project, sequence_id: str, marker_id: str, *, frame: int) -> Marker:
+    seq = _sequence(project, sequence_id)
+    marker = _marker(seq, marker_id)
+    marker.frame = frame
+    seq.markers.sort(key=lambda m: m.frame)
+    _mark_dirty(project)
+    return marker
+
+
+def edit_marker(project: Project, sequence_id: str, marker_id: str, *,
+                 name: str | None = None, color: str | None = None, category: str | None = None) -> Marker:
+    seq = _sequence(project, sequence_id)
+    marker = _marker(seq, marker_id)
+    if name is not None:
+        marker.name = name
+    if color is not None:
+        marker.color = color
+    if category is not None:
+        marker.category = category
+    _mark_dirty(project)
+    return marker
+
+
+# ---------------------------------------------------------- composite ops -
+
+def replace_scene(
+    project: Project, sequence_id: str, track_id: str, *,
+    start_frame: int, end_frame: int, in_point: int, out_point: int,
+    asset_id: str | None = None, clip_type: ClipType = "video", name: str = "",
+) -> tuple[Clip, list[str]]:
+    """Replaces whatever occupies [start_frame, end_frame) on a track with
+    a new clip: clips fully inside the range are removed, clips only
+    partially overlapping are trimmed at the boundary, and a clip that
+    fully contains the range gets split around it. Returns the new clip
+    and the ids of every clip removed in the process (trims/splits keep
+    their original ids, so they're not included).
+    """
+    if end_frame <= start_frame:
+        raise InvalidOperationError("end_frame must be greater than start_frame")
+    seq = _sequence(project, sequence_id)
+    track = _track(seq, track_id)
+
+    removed_ids: list[str] = []
+    for c in list(track.clips):
+        if c.end <= start_frame or c.position >= end_frame:
+            continue  # no overlap with the range being replaced
+        if c.position >= start_frame and c.end <= end_frame:
+            track.clips.remove(c)
+            removed_ids.append(c.id)
+        elif c.position < start_frame and c.end <= end_frame:
+            trim_clip(project, sequence_id, c.id, edge="end", delta_frames=start_frame - c.end)
+        elif c.position >= start_frame and c.end > end_frame:
+            trim_clip(project, sequence_id, c.id, edge="start", delta_frames=end_frame - c.position)
+        else:
+            # the replaced range is a hole entirely inside this one clip
+            _left, right = split_clip(project, sequence_id, c.id, at_frame=start_frame)
+            if end_frame < right.end:
+                middle, _right2 = split_clip(project, sequence_id, right.id, at_frame=end_frame)
+                track.clips.remove(middle)
+                removed_ids.append(middle.id)
+            else:
+                track.clips.remove(right)
+                removed_ids.append(right.id)
+
+    new_clip = add_clip(
+        project, sequence_id, track_id,
+        position=start_frame, in_point=in_point, out_point=out_point,
+        asset_id=asset_id, clip_type=clip_type, name=name,
+    )
+    return new_clip, removed_ids

@@ -139,6 +139,7 @@ class Clip:
 
 @dataclass
 class Marker:
+    id: str
     frame: int
     name: str = ""
     color: str = "#00ff00"
