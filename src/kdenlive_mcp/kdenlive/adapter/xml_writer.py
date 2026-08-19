@@ -32,6 +32,7 @@ normally as a result (no `hide="audio"` is set on video-track tracks).
 
 from __future__ import annotations
 
+import uuid
 import xml.etree.ElementTree as ET
 from pathlib import Path
 
@@ -120,8 +121,18 @@ class KdenliveXmlWriter:
         self.project = project
         self.media_index = media_index
         self.ids = _IdAllocator()
-        self._asset_chain_id: dict[str, str] = {}
+        self._asset_chain_id: dict[str, str] = {}  # asset_id -> the BIN's own dedicated chain (main_bin only)
         self._asset_bin_id: dict[str, int] = {}
+        # asset_id -> a UUID shared by every producer/chain instance of that
+        # asset (bin chain + every timeline placement). This, not
+        # kdenlive:id, is what Kdenlive's own project loader actually keys
+        # a timeline clip's "bin reference" validation on (meltBuilder.cpp:
+        # reads kdenlive:control_uuid off the timeline clip's producer and
+        # drops the clip if it's missing/invalid) -- confirmed against
+        # Kdenlive's real source after a real project of ours got its
+        # clips silently stripped on open without this property.
+        self._asset_control_uuid: dict[str, str] = {}
+        self._clip_placement_id: dict[str, str] = {}  # clip.id -> its own dedicated timeline producer/chain
         self._color_producer_id: dict[str, str] = {}
         self._target_path: Path | None = None
 
@@ -175,11 +186,16 @@ class KdenliveXmlWriter:
         _prop(producer0, "kdenlive:playlistid", "black_track")
         _prop(producer0, "mlt_image_format", "rgba")
 
+        sequence = project.active_sequence()
+        if sequence is None:
+            raise InvalidOperationError("Project has no active sequence to write")
+
         used_assets = self._collect_used_assets()
         for asset in used_assets:
             self._write_bin_producer(mlt, asset)
 
         self._write_text_and_color_producers(mlt)
+        self._write_placement_producers(mlt, sequence)
 
         main_bin = _sub(mlt, "playlist", id="main_bin")
         self._write_doc_properties(main_bin)
@@ -188,10 +204,6 @@ class KdenliveXmlWriter:
             dur_frames = max(1, round(asset.duration * settings.fps_float)) if asset.duration else 1
             entry = _sub(main_bin, "entry", producer=chain_id,
                          **{"in": "00:00:00.000"}, out=frames_to_timecode(dur_frames - 1, settings.fps))
-
-        sequence = project.active_sequence()
-        if sequence is None:
-            raise InvalidOperationError("Project has no active sequence to write")
 
         track_tractor_id: dict[str, str] = {}
 
@@ -367,6 +379,8 @@ class KdenliveXmlWriter:
     def _write_bin_producer(self, mlt: ET.Element, asset: MediaAsset) -> None:
         settings = self.project.settings
         bin_id = self.ids.next_bin_id()
+        control_uuid = "{%s}" % uuid.uuid4()
+        self._asset_control_uuid[asset.id] = control_uuid
 
         if asset.kind == "image":
             producer_id = self.ids.next("producer")
@@ -377,6 +391,7 @@ class KdenliveXmlWriter:
             _prop(el, "resource", asset.path)
             _prop(el, "mlt_service", "qimage")
             _prop(el, "kdenlive:id", str(bin_id))
+            _prop(el, "kdenlive:control_uuid", control_uuid)
             _prop(el, "kdenlive:clip_type", "5")
             self._asset_chain_id[asset.id] = producer_id
             self._asset_bin_id[asset.id] = bin_id
@@ -399,11 +414,76 @@ class KdenliveXmlWriter:
         else:
             _prop(el, "audio_index", "-1")
         _prop(el, "kdenlive:id", str(bin_id))
+        _prop(el, "kdenlive:control_uuid", control_uuid)
         _prop(el, "kdenlive:folderid", "-1")
         if asset.size_bytes:
             _prop(el, "kdenlive:file_size", str(asset.size_bytes))
         self._asset_chain_id[asset.id] = chain_id
         self._asset_bin_id[asset.id] = bin_id
+
+    def _write_placement_producers(self, mlt: ET.Element, sequence: Sequence) -> None:
+        """Mints a dedicated chain/producer instance for every individual
+        timeline clip placement that references a real asset, duplicating
+        the bin chain's properties but as its own XML element.
+
+        This mirrors what real Kdenlive projects always do: main_bin's
+        clip entries reference their own producer instances, entirely
+        separate from the ones actual timeline playlists reference for the
+        same underlying asset (verified directly against a real project:
+        a 6-clip project has 3 distinct chain elements per clip -- one for
+        the bin, one for its video-track placement, one for its audio-track
+        placement). Reusing a single shared chain everywhere (the original,
+        simpler approach here) is valid MLT and melt loads it fine, but
+        Kdenlive's own GUI project loader does an additional "does this
+        timeline clip have a resolvable bin reference" check that a shared
+        chain silently fails -- confirmed by hand: Kdenlive strips every
+        clip from the timeline on load, with no error, when a chain is
+        referenced from more than one playlist. So every clip placement
+        gets its own dedicated element instead.
+        """
+        for track in sequence.tracks:
+            for clip in track.clips:
+                if not clip.asset_id or clip.clip_type not in ("video", "audio", "image"):
+                    continue
+                asset = self.media_index.get(clip.asset_id)
+                if asset is None:
+                    continue
+                self._clip_placement_id[clip.id] = self._new_placement_producer(mlt, asset)
+
+    def _new_placement_producer(self, mlt: ET.Element, asset: MediaAsset) -> str:
+        settings = self.project.settings
+        bin_id = self._asset_bin_id[asset.id]
+        control_uuid = self._asset_control_uuid[asset.id]
+
+        if asset.kind == "image":
+            producer_id = self.ids.next("producer")
+            el = _sub(mlt, "producer", id=producer_id, **{"in": "00:00:00.000"},
+                      out=frames_to_timecode(14999, settings.fps))
+            _prop(el, "length", "15000")
+            _prop(el, "eof", "pause")
+            _prop(el, "resource", asset.path)
+            _prop(el, "mlt_service", "qimage")
+            _prop(el, "kdenlive:id", str(bin_id))
+            _prop(el, "kdenlive:control_uuid", control_uuid)
+            _prop(el, "kdenlive:clip_type", "5")
+            return producer_id
+
+        dur_frames = max(1, round(asset.duration * settings.fps_float)) if asset.duration else 1
+        chain_id = self.ids.next("chain")
+        el = _sub(mlt, "chain", id=chain_id, out=frames_to_timecode(dur_frames - 1, settings.fps))
+        _prop(el, "length", str(dur_frames))
+        _prop(el, "eof", "pause")
+        _prop(el, "resource", asset.path)
+        _prop(el, "mlt_service", "avformat-novalidate")
+        _prop(el, "seekable", "1")
+        _prop(el, "video_index", "0" if asset.has_video else "-1")
+        _prop(el, "audio_index", ("1" if asset.has_video else "0") if asset.has_audio else "-1")
+        _prop(el, "kdenlive:control_uuid", control_uuid)
+        _prop(el, "kdenlive:id", str(bin_id))
+        _prop(el, "kdenlive:folderid", "-1")
+        if asset.size_bytes:
+            _prop(el, "kdenlive:file_size", str(asset.size_bytes))
+        return chain_id
 
     def _write_text_and_color_producers(self, mlt: ET.Element) -> None:
         settings = self.project.settings
@@ -413,16 +493,20 @@ class KdenliveXmlWriter:
         for track in sequence.tracks:
             for clip in track.clips:
                 if clip.clip_type == "color" and clip.color:
-                    key = clip.color
-                    if key not in self._color_producer_id:
-                        pid = self.ids.next("producer")
-                        el = _sub(mlt, "producer", id=pid, **{"in": "00:00:00.000"},
-                                  out=frames_to_timecode(14999, settings.fps))
-                        _prop(el, "length", "15000")
-                        _prop(el, "eof", "pause")
-                        _prop(el, "resource", _color_to_mlt(clip.color))
-                        _prop(el, "mlt_service", "color")
-                        self._color_producer_id[key] = pid
+                    # A dedicated producer per clip, not shared by color
+                    # value -- same "one instance per placement" rule as
+                    # _write_placement_producers; a shared producer
+                    # referenced from multiple playlists is what makes
+                    # Kdenlive's own loader silently strip clips, even
+                    # though melt tolerates it fine.
+                    pid = self.ids.next("producer")
+                    el = _sub(mlt, "producer", id=pid, **{"in": "00:00:00.000"},
+                              out=frames_to_timecode(14999, settings.fps))
+                    _prop(el, "length", "15000")
+                    _prop(el, "eof", "pause")
+                    _prop(el, "resource", _color_to_mlt(clip.color))
+                    _prop(el, "mlt_service", "color")
+                    self._color_producer_id[f"__color__{clip.id}"] = pid
                 elif clip.clip_type == "text":
                     pid = self.ids.next("producer")
                     el = _sub(mlt, "producer", id=pid, **{"in": "00:00:00.000"},
@@ -447,11 +531,11 @@ class KdenliveXmlWriter:
 
     def _producer_ref(self, clip: Clip) -> str:
         if clip.clip_type == "color":
-            return self._color_producer_id[clip.color or "#000000ff"]
+            return self._color_producer_id[f"__color__{clip.id}"]
         if clip.clip_type == "text":
             return self._color_producer_id[f"__text__{clip.id}"]
         if clip.asset_id:
-            return self._asset_chain_id[clip.asset_id]
+            return self._clip_placement_id[clip.id]
         raise InvalidOperationError(f"Clip '{clip.id}' has no asset and is not a color/text clip")
 
     # --------------------------------------------------------- playlists -
