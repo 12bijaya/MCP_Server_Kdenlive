@@ -278,7 +278,33 @@ class KdenliveXmlWriter:
         self._write_creative_transitions(master, sequence, track_position, settings)
         self._write_subtitles(master, sequence, settings)
 
+        self._write_project_tractor(mlt, master, sequence, settings)
+
         return mlt
+
+    def _write_project_tractor(self, mlt: ET.Element, sequence_tractor: ET.Element,
+                                sequence: Sequence, settings) -> None:
+        """Kdenlive's document loader (ProjectItemModel::loadBinPlaylist)
+        doesn't find main_bin by scanning the XML tree -- it fetches it via
+        MLT's `xml_retain` mechanism off what it calls the "document
+        tractor": one more outer <tractor kdenlive:projectTractor="1">
+        wrapping the sequence tractor, always the LAST top-level element in
+        the file (MLT XML's convention: the last top-level object is the
+        default/entry producer). Without this wrapper and main_bin's own
+        xml_retain=1 property, the bin is never populated at all, so every
+        timeline clip fails Kdenlive's control_uuid-to-bin-clip resolution
+        and gets silently stripped -- confirmed against a real project of
+        ours doing exactly that, then against Kdenlive's real source
+        (src/bin/projectitemmodel.cpp's loadBinPlaylist/loadTractorPlaylist)
+        and a real file's own structure to find what was actually missing.
+        """
+        project_tractor = _sub(mlt, "tractor", id=self.ids.next("tractor"),
+                                **{"in": "00:00:00.000"},
+                                out=frames_to_timecode(max(1, sequence.duration()), settings.fps))
+        _prop(project_tractor, "kdenlive:projectTractor", "1")
+        _sub(project_tractor, "track", **{"in": "00:00:00.000"},
+             out=frames_to_timecode(max(1, sequence.duration()), settings.fps),
+             producer=sequence_tractor.get("id"))
 
     def _write_subtitles(self, master: ET.Element, sequence: Sequence, settings) -> None:
         """Kdenlive stores a sequence's subtitles as a sibling
@@ -375,6 +401,11 @@ class KdenliveXmlWriter:
             _prop(main_bin, "kdenlive:docproperties.activetimeline", seq_uuid)
         for key, value in project.metadata.items():
             _prop(main_bin, f"kdenlive:docproperties.{key}", str(value))
+        # Required for Kdenlive to find main_bin at all: it's fetched via
+        # MLT's xml_retain mechanism off the final project tractor, not by
+        # scanning the XML tree for <playlist id="main_bin">. See
+        # _write_project_tractor for the other half of this.
+        _prop(main_bin, "xml_retain", "1")
 
     def _write_bin_producer(self, mlt: ET.Element, asset: MediaAsset) -> None:
         settings = self.project.settings
@@ -492,7 +523,7 @@ class KdenliveXmlWriter:
             return
         for track in sequence.tracks:
             for clip in track.clips:
-                if clip.clip_type == "color" and clip.color:
+                if clip.clip_type == "color":
                     # A dedicated producer per clip, not shared by color
                     # value -- same "one instance per placement" rule as
                     # _write_placement_producers; a shared producer
