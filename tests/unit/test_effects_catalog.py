@@ -10,6 +10,7 @@ multi-version effects, missing `id` attributes, etc).
 from __future__ import annotations
 
 import glob
+import os
 
 import pytest
 
@@ -23,6 +24,7 @@ from kdenlive_mcp.kdenlive.effects.catalog import (
 )
 
 REAL_EFFECTS_DIRS = glob.glob("/var/lib/snapd/snap/kdenlive/*/usr/share/kdenlive/effects")
+REAL_EFFECTS_DIRS += [d for d in ("/usr/share/kdenlive/effects",) if os.path.isdir(d)]
 
 pytestmark = pytest.mark.skipif(
     not REAL_EFFECTS_DIRS,

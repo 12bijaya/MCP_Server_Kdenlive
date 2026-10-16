@@ -7,6 +7,7 @@ actually loads in the real engine.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from kdenlive_mcp.mcp_tools.tools import (
 pytestmark = pytest.mark.integration
 
 REAL_CLIP_CANDIDATES = [
+    *([Path(os.environ["KDENLIVE_MCP_SAMPLE_CLIP"])] if os.environ.get("KDENLIVE_MCP_SAMPLE_CLIP") else []),
     Path.home() / "Documents/kaam/day4/videos/clip1.mp4",
     Path.home() / "Documents/kaam/day4/videos/clip2.mp4",
 ]

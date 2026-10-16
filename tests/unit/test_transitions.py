@@ -7,6 +7,7 @@ as test_effects_catalog.py.
 from __future__ import annotations
 
 import glob
+import os
 
 import pytest
 
@@ -20,6 +21,7 @@ from kdenlive_mcp.kdenlive.transitions.catalog import (
 )
 
 REAL_TRANSITIONS_DIRS = glob.glob("/var/lib/snapd/snap/kdenlive/*/usr/share/kdenlive/transitions")
+REAL_TRANSITIONS_DIRS += [d for d in ("/usr/share/kdenlive/transitions",) if os.path.isdir(d)]
 
 pytestmark = pytest.mark.skipif(
     not REAL_TRANSITIONS_DIRS,

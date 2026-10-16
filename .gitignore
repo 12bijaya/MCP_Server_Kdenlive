@@ -18,9 +18,9 @@ htmlcov/
 # This project's own runtime state (never committed: contains local media
 # paths, thumbnails, cached analysis, snapshots, workspace projects)
 .kdenlive-mcp/
-workspace/
-cache/
-snapshots/
+/workspace/
+/cache/
+/snapshots/
 
 # Local scratch/test output some tools drop at repo root
 *.kdenlive
